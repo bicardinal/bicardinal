@@ -1,0 +1,8 @@
+/myenv
+*.pyc
+__pycache__
+*.db
+.env
+.pyirc
+*.egg-info/
+dist/
