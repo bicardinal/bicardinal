@@ -16,7 +16,7 @@ from .office.config import Config
 from .services.embedder import Embedder
 from .services.summarizer import Summarizer
 
-from .office.collection import Collection, CollectionStatus
+from .collection import Collection, CollectionStatus
 from .office.types import AddResult, FileHit, Modality, SearchHit, Usage
 from .office.exceptions import (
     BicardinalError,
@@ -28,7 +28,6 @@ from .office.exceptions import (
     ExtractionError,
     UnsupportedFileType,
 )
-import re
 
 
 class Bicardinal:

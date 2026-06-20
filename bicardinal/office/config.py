@@ -12,6 +12,16 @@ class Config:
     chunk_size: int = 512
     overlap: float = 0.1
 
+    # ocr
+    ocr_model: str = "mistral-ocr-latest"
+
+    # image
+    image_model: str = "gpt-5.4"
+
+    # transcribe
+    transcribe_model: str = "whisper-1"
+
+
     # embedder
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_batch_size: int = 64
@@ -27,7 +37,7 @@ class Config:
     # index (HNSW)
     M: int = 16
     ef_construction: int = 200
-    ef_search: int = 64
+    efs: int = 64
     build_n_threads: int = 1
 
     # stores

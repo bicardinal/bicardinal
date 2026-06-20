@@ -12,7 +12,7 @@ def _build_lexical_config() -> brinicle.LexicalConfig:
         build_category_weight=1.0, search_category_weight=1.0,
         build_vector_weight=1.0, search_vector_weight=1.0,
         build_category_penalty=1.0,
-        search_category_penalty=search_penalty,
+        search_category_penalty=1e8,
         vector_normalized=True,  # we always feed unit vectors, right?
     )
 
@@ -63,7 +63,7 @@ class Index:
         n_jobs: int = 1,
     ) -> list[tuple[str, float]]:
         return self._engine.search_with_distance(
-            "", k=k, efs=efs, threshold=threshold, category=category, vector=vector, n_jobs=1,
+            "", k=k, efs=efs, threshold=threshold, category=category, vector=vector, n_jobs=n_jobs,
         )
     
     def delete(self, chunk_ids: list[str]) -> None:

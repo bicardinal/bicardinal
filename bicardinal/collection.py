@@ -8,10 +8,10 @@ from ..services.summarizer import Summarizer
 from ..store.catalog import Catalog
 from ..store.index import Index
 from ..store.payload import PayloadStore
-from .config import Config
-from .exceptions import DocumentNotFound, DuplicateDocument
-from .pipeline import IngestOutput, ProgressFn, build_chunks
-from .types import AddResult, FileHit, SearchHit
+from ..office.config import Config
+from ..office.exceptions import DocumentNotFound, DuplicateDocument
+from ..office.pipeline import IngestOutput, ProgressFn, build_chunks
+from ..office.types import AddResult, FileHit, SearchHit
 from dataclasses import dataclass
 
 
