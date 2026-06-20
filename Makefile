@@ -35,7 +35,7 @@ format:
 	black tests
 
 pybuild:
-	cibuildwheel --platform linux
+	pip wheel .
 
 upload-pypi:
 	python -m twine upload wheelhouse/* --verbose
