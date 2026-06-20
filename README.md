@@ -1,2 +1,1 @@
-# bicardinal-python
-The bicardinal Python client
+Hello GitHub!

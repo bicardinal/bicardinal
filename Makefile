@@ -1,23 +1,22 @@
-.PHONY: install test clean help build upload-pypi
+.PHONY: help install dev clean format pybuild upload-pypi
 
-# Variables
 PYTHON := python3
-PIP := pip3
 
 
 help:
 	@echo "Available commands:"
-	@echo "  make install       - Install dependencies"
-	@echo "  make test          - Run tests"
-	@echo "  make clean         - Clean up cache and temp files"
-	@echo "  make build         - Build"
-	@echo "  make upload-pypi   - Update pypi package"
+	@echo "  make install      - Install dependencies"
+	@echo "  make dev          - Run development server"
+	@echo "  make clean        - Clean up cache and temp files"
+	@echo "  make format       - Format code content"
+	@echo "  make upload-pypi  - Update pypi package"
+	@echo "  make pybuild      - Python build"
 
 install:
-	$(PIP) install -r requirements.txt
+	pip install -e .
 
-test:
-	$(PYTHON) -m pytest tests/ -v
+dev:
+	pip install -e .
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -25,11 +24,18 @@ clean:
 	find . -type f -name "*.pyo" -delete
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name "dist" -exec rm -rf {} + 2>/dev/null || true
+	rm -r wheelhouse
 
-build:
-	python3 -m build
+format:
+	autoflake bicardinal --remove-all-unused-imports --quiet --in-place -r --exclude third_party
+	isort bicardinal --force-single-line-imports
+	black bicardinal
+	autoflake tests --remove-all-unused-imports --quiet --in-place -r --exclude third_party
+	isort tests --force-single-line-imports
+	black tests
+
+pybuild:
+	cibuildwheel --platform linux
 
 upload-pypi:
-	python3 -m pip install --upgrade twine
-	python3 -m twine upload dist/*
+	python -m twine upload wheelhouse/* --verbose

@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from ..extractors.router import Router
+from ..services.embedder import Embedder
+from ..services.summarizer import Summarizer
+from ..store.catalog import Catalog
+from ..store.index import Index
+from ..store.payload import PayloadStore
+from .config import Config
+from .exceptions import DocumentNotFound, DuplicateDocument
+from .pipeline import IngestOutput, ProgressFn, build_chunks
+from .types import AddResult, FileHit, SearchHit
+from dataclasses import dataclass
+
+
+@dataclass
+class _FailedDoc:
+    filename: str
+    output: IngestOutput
+    error: str
+
+@dataclass
+class CollectionStatus:
+    n_files: int
+    n_chunks: int
+    filenames: list[str]
+
+class Collection:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        config: Config,
+        embedder: Embedder,
+        summarizer: Summarizer,
+        router: Router,
+    ) -> None:
+        self._path = Path(path)
+        self._path.mkdir(parents=True, exist_ok=True)
+        self._config = config
+        self._embedder = embedder
+        self._summarizer = summarizer
+        self._router = router
+        self._index = Index(
+            self._path / "index",
+            embedder.dim,
+            M=config.M,
+            ef_construction=config.ef_construction,
+            ef_search=config.ef_search,
+            build_n_threads=config.build_n_threads,
+        )
+        self._payload = PayloadStore(self._path / "payload", shard_count=config.shard_count)
+        self._catalog = Catalog(self._path / "catalog", shard_count=config.shard_count)
+        self._failed: list[_FailedDoc] = []   # write failures, repaired at finalize
+
+    def _write_document(self, filename: str, out: IngestOutput, *, upsert: bool = False) -> None:
+        for chunk_id, vector, record in zip(out.chunk_ids, out.vectors, out.records):
+            self._index.ingest(chunk_id, vector, filename)
+        if out.records:
+            (self._payload.upsert if upsert else self._payload.insert)(
+                dict(zip(out.chunk_ids, out.records))
+            )
+        self._catalog.add_ids(filename, out.chunk_ids)
+
+    def _project(self, hits: list[tuple[str, float]]) -> list[SearchHit]:
+        if not hits:
+            return []
+        ids = [cid for cid, _ in hits]
+        records = self._payload.get(ids)
+        out: list[SearchHit] = []
+        for (cid, dist), rec in zip(hits, records):
+            if rec is None:  # id in index but missing payload — skip defensively
+                continue
+            out.append(
+                SearchHit(
+                    chunk_id=cid,
+                    filename=rec.filename,
+                    chunk_index=rec.chunk_index,
+                    raw_text=rec.raw_text,
+                    description=rec.description,
+                    score=dist,
+                )
+            )
+        return out
+
+    def init(self, mode: str = "insert") -> None:
+        self._index.init(mode)  # open for staging: insert | upsert
+
+    def ingest(
+        self,
+        filename: str,
+        data: bytes,
+        *,
+        on_progress: ProgressFn | None = None,
+    ) -> AddResult:
+        if self._catalog.has_file(filename):
+            raise DuplicateDocument(filename)
+        out = build_chunks(
+            filename,
+            data,
+            router=self._router,
+            embedder=self._embedder,
+            summarizer=self._summarizer,
+            config=self._config,
+            on_progress=on_progress,
+        )
+        errors = list(out.errors)
+        try:
+            self._write_document(filename, out)
+            if on_progress is not None:
+                on_progress("write", len(out.records), len(out.records))
+        except Exception as e:  # defer; finalize purges partial ids and replays
+            self._failed.append(_FailedDoc(filename, out, str(e)))
+            errors.append(f"write deferred to finalize: {e}")
+        return AddResult(filename, len(out.records), out.usage, errors)
+
+    def finalize(self, *, max_retries: int = 3) -> dict[str, str]:
+        self._index.finalize()  # build everything staged in the normal pass
+        retry = self._failed
+        self._failed = []
+        attempt = 0
+        while retry and attempt < max_retries:
+            attempt += 1
+            self._index.init("upsert")  # replay overwrites partial entries by id
+            still: list[_FailedDoc] = []
+            for fd in retry:
+                try:
+                    self._catalog.delete_file(fd.filename)  # idempotent catalog replay
+                    self._write_document(fd.filename, fd.output, upsert=True)
+                except Exception as e:
+                    fd.error = str(e)
+                    still.append(fd)
+            self._index.finalize()  # build the repair delta
+            retry = still
+        return {fd.filename: fd.error for fd in retry}  # terminal failures; {} = all repaired
+
+    def search(
+            self,
+            query: str,
+            k: int | None = None,
+            *,
+            n_jobs: int | None = None,
+            efs: int | None = None,
+        ) -> list[SearchHit]:
+            if not self._catalog.get_files():
+                return []  # nothing finalized yet; engine would raise
+            k = k if k is not None else self._config.default_k
+            n_jobs = n_jobs if n_jobs is not None else self._config.n_jobs
+            efs = efs if efs is not None else self._config.efs
+            qvec = self._embedder.embed_query(query)
+            hits = self._index.search_with_distance(qvec, k, n_jobs=n_jobs, efs=efs)
+            return self._project(hits)
+
+    def search_in_file(
+        self,
+        query: str,
+        filename: str,
+        k: int | None = None,
+        *,
+        n_jobs: int | None = None,
+        efs: int | None = None,
+        exact: bool = True,
+    ) -> list[SearchHit]:
+        if not self._catalog.has_file(filename):
+            raise DocumentNotFound(filename)
+        k = k if k is not None else self._config.default_k
+        n_jobs = n_jobs if n_jobs is not None else self._config.n_jobs
+        efs = efs if efs is not None else self._config.efs
+        qvec = self._embedder.embed_query(query)
+        hits = self._index.search_with_distance(
+            qvec, k, category=filename, threshold=self._config.file_scope_threshold, n_jobs=n_jobs, efs=efs
+        )
+        results = self._project(hits)
+        if exact:
+            results = [h for h in results if h.filename == filename]  # drop category hash-collisions
+        return results
+
+
+    def most_similar_files(
+        self,
+        query: str,
+        k: int | None = None,
+        *,
+        candidate_k: int = 100,
+        n_jobs: int | None = None,
+        efs: int | None = None,
+    ) -> list[FileHit]:
+        if not self._catalog.get_files():
+            return []  # nothing finalized yet
+        k = k if k is not None else self._config.default_k
+        n_jobs = n_jobs if n_jobs is not None else self._config.n_jobs
+        efs = efs if efs is not None else self._config.efs
+        qvec = self._embedder.embed_query(query)
+        hits = self._index.search_with_distance(qvec, candidate_k, n_jobs=n_jobs, efs=efs)
+        best: dict[str, SearchHit] = {}
+        for h in self._project(hits):
+            if h.filename not in best:  # ascending distance -> first per file is its best
+                best[h.filename] = h
+        ranked = sorted(best.values(), key=lambda h: h.score)  # files by their best chunk
+        return [FileHit(filename=h.filename, score=h.score, best_chunk=h) for h in ranked[:k]]
+
+
+    def status(self) -> CollectionStatus:
+        files = self._catalog.get_files()
+        n_chunks = sum(len(self._catalog.get_ids(f)) for f in files)
+        return CollectionStatus(n_files=len(files), n_chunks=n_chunks, filenames=files)
+
+    def delete(self, filename: str) -> None:
+        if not self._catalog.has_file(filename):
+            raise DocumentNotFound(filename)
+        ids = self._catalog.get_ids(filename)
+        self._index.delete(ids)
+        self._payload.delete(ids)
+        self._catalog.delete_file(filename)  # catalog last: file stays consistent until purge completes
+
+    def close(self) -> None:
+        self._index.close()
+        self._payload.close()
+        self._catalog.close()
+
+    def destroy(self) -> None:
+        self._index.destroy()
+        self._payload.destroy()
+        self._catalog.destroy()
+
+    def __enter__(self) -> "Collection":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
