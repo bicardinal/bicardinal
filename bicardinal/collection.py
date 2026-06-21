@@ -48,7 +48,7 @@ class Collection:
             embedder.dim,
             M=config.M,
             ef_construction=config.ef_construction,
-            ef_search=config.ef_search,
+            ef_search=config.efs,
             build_n_threads=config.build_n_threads,
         )
         self._payload = PayloadStore(self._path / "payload", shard_count=config.shard_count)
