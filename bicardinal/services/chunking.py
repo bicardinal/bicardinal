@@ -13,16 +13,20 @@ def chunk_text(text: str, *, chunk_size: int, overlap: float) -> list[str]:
         raise ValueError("chunk_size must be > 0")
     if not (0.0 <= overlap < 1.0):
         raise ValueError("overlap must be in [0, 1)")
-    ids = _tokenizer.encode(text, add_special_tokens=False).ids
-    if not ids:
+    enc = _tokenizer.encode(text, add_special_tokens=False)
+    offsets = enc.offsets
+    n = len(offsets)
+    if n == 0:
         return []
-    stride = max(1, round(chunk_size * (1.0 - overlap)))  # how far the window jumps
+    stride = max(1, round(chunk_size * (1.0 - overlap)))
     chunks: list[str] = []
     start = 0
-    n = len(ids)
     while start < n:
-        chunks.append(_tokenizer.decode(ids[start : start + chunk_size]))
-        if start + chunk_size >= n:
+        end = min(start + chunk_size, n)
+        s = offsets[start][0]
+        e = offsets[end - 1][1]
+        chunks.append(text[s:e])
+        if end >= n:
             break
         start += stride
     return chunks

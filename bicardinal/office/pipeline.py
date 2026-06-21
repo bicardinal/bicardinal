@@ -11,7 +11,8 @@ from ..services.chunking import chunk_text
 from ..services.embedder import Embedder
 from ..services.summarizer import Summarizer
 from .config import Config
-from .types import ChunkRecord, Usage
+from .types import ChunkRecord
+from .types import Usage
 
 ProgressFn = Callable[[str, int, int], None]  # stage, done, total
 
@@ -25,10 +26,11 @@ def chunk_id_for(filename: str, chunk_index: int, raw_text: str) -> str:
     h.update(raw_text.encode())
     return "ch_" + h.hexdigest()
 
+
 @dataclass
 class IngestOutput:
     chunk_ids: list[str]
-    vectors: np.ndarray        # (n, dim) float32, L2-normalized
+    vectors: np.ndarray  # (n, dim) float32, L2-normalized
     records: list[ChunkRecord]
     usage: Usage
     errors: list[str]
@@ -53,14 +55,18 @@ def build_chunks(
     usage = extracted.usage
     errors: list[str] = []
 
-    if extracted.prebuilt_descriptions is not None:  # image: one chunk/segment, vision wrote the description
+    if (
+        extracted.prebuilt_descriptions is not None
+    ):  # image: one chunk/segment, vision wrote the description
         raw_texts = extracted.segments
         descriptions = extracted.prebuilt_descriptions
         progress("describe", len(raw_texts), len(raw_texts))
     else:  # text/docx/pdf/audio: window each segment, then summarize
         raw_texts = []
         for seg in extracted.segments:
-            raw_texts.extend(chunk_text(seg, chunk_size=config.chunk_size, overlap=config.overlap))
+            raw_texts.extend(
+                chunk_text(seg, chunk_size=config.chunk_size, overlap=config.overlap)
+            )
         descriptions, desc_usage, desc_errors = summarizer.describe(
             raw_texts, on_tick=lambda d, t: progress("describe", d, t)
         )
@@ -75,7 +81,18 @@ def build_chunks(
 
     chunk_ids = [chunk_id_for(filename, i, raw_texts[i]) for i in range(len(raw_texts))]
     records = [
-        ChunkRecord(raw_text=raw_texts[i], description=descriptions[i], filename=filename, chunk_index=i)
+        ChunkRecord(
+            raw_text=raw_texts[i],
+            description=descriptions[i],
+            filename=filename,
+            chunk_index=i,
+        )
         for i in range(len(raw_texts))
     ]
-    return IngestOutput(chunk_ids=chunk_ids, vectors=vectors, records=records, usage=usage, errors=errors)
+    return IngestOutput(
+        chunk_ids=chunk_ids,
+        vectors=vectors,
+        records=records,
+        usage=usage,
+        errors=errors,
+    )

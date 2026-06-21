@@ -26,7 +26,7 @@ def main() -> None:
         store.delete("demo")
     col = store.create("demo")
 
-    col.init("insert")
+    col.init("build")
     for path in docs:
         try:
             result = col.ingest(

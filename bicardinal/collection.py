@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
-from ..extractors.router import Router
-from ..services.embedder import Embedder
-from ..services.summarizer import Summarizer
-from ..store.catalog import Catalog
-from ..store.index import Index
-from ..store.payload import PayloadStore
-from ..office.config import Config
-from ..office.exceptions import DocumentNotFound, DuplicateDocument
-from ..office.pipeline import IngestOutput, ProgressFn, build_chunks
-from ..office.types import AddResult, FileHit, SearchHit
-from dataclasses import dataclass
+from .extractors.router import Router
+from .office.config import Config
+from .office.exceptions import DocumentNotFound
+from .office.exceptions import DuplicateDocument
+from .office.pipeline import IngestOutput
+from .office.pipeline import ProgressFn
+from .office.pipeline import build_chunks
+from .office.types import AddResult
+from .office.types import FileHit
+from .office.types import SearchHit
+from .services.embedder import Embedder
+from .services.summarizer import Summarizer
+from .store.catalog import Catalog
+from .store.index import Index
+from .store.payload import PayloadStore
 
 
 @dataclass
@@ -21,11 +26,13 @@ class _FailedDoc:
     output: IngestOutput
     error: str
 
+
 @dataclass
 class CollectionStatus:
     n_files: int
     n_chunks: int
     filenames: list[str]
+
 
 class Collection:
     def __init__(
@@ -51,11 +58,15 @@ class Collection:
             ef_search=config.efs,
             build_n_threads=config.build_n_threads,
         )
-        self._payload = PayloadStore(self._path / "payload", shard_count=config.shard_count)
+        self._payload = PayloadStore(
+            self._path / "payload", shard_count=config.shard_count
+        )
         self._catalog = Catalog(self._path / "catalog", shard_count=config.shard_count)
-        self._failed: list[_FailedDoc] = []   # write failures, repaired at finalize
+        self._failed: list[_FailedDoc] = []  # write failures, repaired at finalize
 
-    def _write_document(self, filename: str, out: IngestOutput, *, upsert: bool = False) -> None:
+    def _write_document(
+        self, filename: str, out: IngestOutput, *, upsert: bool = False
+    ) -> None:
         for chunk_id, vector, record in zip(out.chunk_ids, out.vectors, out.records):
             self._index.ingest(chunk_id, vector, filename)
         if out.records:
@@ -86,7 +97,7 @@ class Collection:
         return out
 
     def init(self, mode: str = "insert") -> None:
-        self._index.init(mode)  # open for staging: insert | upsert
+        self._index.init(mode)  # open for staging: build | insert | upsert
 
     def ingest(
         self,
@@ -134,24 +145,26 @@ class Collection:
                     still.append(fd)
             self._index.finalize()  # build the repair delta
             retry = still
-        return {fd.filename: fd.error for fd in retry}  # terminal failures; {} = all repaired
+        return {
+            fd.filename: fd.error for fd in retry
+        }  # terminal failures; {} = all repaired
 
     def search(
-            self,
-            query: str,
-            k: int | None = None,
-            *,
-            n_jobs: int | None = None,
-            efs: int | None = None,
-        ) -> list[SearchHit]:
-            if not self._catalog.get_files():
-                return []  # nothing finalized yet; engine would raise
-            k = k if k is not None else self._config.default_k
-            n_jobs = n_jobs if n_jobs is not None else self._config.n_jobs
-            efs = efs if efs is not None else self._config.efs
-            qvec = self._embedder.embed_query(query)
-            hits = self._index.search_with_distance(qvec, k, n_jobs=n_jobs, efs=efs)
-            return self._project(hits)
+        self,
+        query: str,
+        k: int | None = None,
+        *,
+        n_jobs: int | None = None,
+        efs: int | None = None,
+    ) -> list[SearchHit]:
+        if not self._catalog.get_files():
+            return []  # nothing finalized yet; engine would raise
+        k = k if k is not None else self._config.default_k
+        n_jobs = n_jobs if n_jobs is not None else self._config.n_jobs
+        efs = efs if efs is not None else self._config.efs
+        qvec = self._embedder.embed_query(query)
+        hits = self._index.search_with_distance(qvec, k, n_jobs=n_jobs, efs=efs)
+        return self._project(hits)
 
     def search_in_file(
         self,
@@ -170,13 +183,19 @@ class Collection:
         efs = efs if efs is not None else self._config.efs
         qvec = self._embedder.embed_query(query)
         hits = self._index.search_with_distance(
-            qvec, k, category=filename, threshold=self._config.file_scope_threshold, n_jobs=n_jobs, efs=efs
+            qvec,
+            k,
+            category=filename,
+            threshold=self._config.file_scope_threshold,
+            n_jobs=n_jobs,
+            efs=efs,
         )
         results = self._project(hits)
         if exact:
-            results = [h for h in results if h.filename == filename]  # drop category hash-collisions
+            results = [
+                h for h in results if h.filename == filename
+            ]  # drop category hash-collisions
         return results
-
 
     def most_similar_files(
         self,
@@ -193,14 +212,22 @@ class Collection:
         n_jobs = n_jobs if n_jobs is not None else self._config.n_jobs
         efs = efs if efs is not None else self._config.efs
         qvec = self._embedder.embed_query(query)
-        hits = self._index.search_with_distance(qvec, candidate_k, n_jobs=n_jobs, efs=efs)
+        hits = self._index.search_with_distance(
+            qvec, candidate_k, n_jobs=n_jobs, efs=efs
+        )
         best: dict[str, SearchHit] = {}
         for h in self._project(hits):
-            if h.filename not in best:  # ascending distance -> first per file is its best
+            if (
+                h.filename not in best
+            ):  # ascending distance -> first per file is its best
                 best[h.filename] = h
-        ranked = sorted(best.values(), key=lambda h: h.score)  # files by their best chunk
-        return [FileHit(filename=h.filename, score=h.score, best_chunk=h) for h in ranked[:k]]
-
+        ranked = sorted(
+            best.values(), key=lambda h: h.score
+        )  # files by their best chunk
+        return [
+            FileHit(filename=h.filename, score=h.score, best_chunk=h)
+            for h in ranked[:k]
+        ]
 
     def status(self) -> CollectionStatus:
         files = self._catalog.get_files()
@@ -213,7 +240,9 @@ class Collection:
         ids = self._catalog.get_ids(filename)
         self._index.delete(ids)
         self._payload.delete(ids)
-        self._catalog.delete_file(filename)  # catalog last: file stays consistent until purge completes
+        self._catalog.delete_file(
+            filename
+        )  # catalog last: file stays consistent until purge completes
 
     def close(self) -> None:
         self._index.close()

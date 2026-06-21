@@ -3,31 +3,34 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from mistralai import Mistral
+from mistralai.client import Mistral
 from openai import OpenAI
 
+from .collection import Collection
+from .collection import CollectionStatus
 from .extractors.audio import AudioExtractor
 from .extractors.docx import DocxExtractor
 from .extractors.image import ImageExtractor
 from .extractors.pdf import PdfExtractor
 from .extractors.router import Router
 from .extractors.text import TextExtractor
+from .office.config import DEFAULT_EMBED_MODEL
 from .office.config import Config
-from .services.embedder import Embedder
+from .office.exceptions import BicardinalError
+from .office.exceptions import CollectionExists
+from .office.exceptions import CollectionNotFound
+from .office.exceptions import DocumentNotFound
+from .office.exceptions import DuplicateDocument
+from .office.exceptions import EmptyFile
+from .office.exceptions import ExtractionError
+from .office.exceptions import UnsupportedFileType
+from .office.types import AddResult
+from .office.types import FileHit
+from .office.types import Modality
+from .office.types import SearchHit
+from .office.types import Usage
+from .services.embedder import make_embedder
 from .services.summarizer import Summarizer
-
-from .collection import Collection, CollectionStatus
-from .office.types import AddResult, FileHit, Modality, SearchHit, Usage
-from .office.exceptions import (
-    BicardinalError,
-    CollectionExists,
-    CollectionNotFound,
-    DocumentNotFound,
-    DuplicateDocument,
-    EmptyFile,
-    ExtractionError,
-    UnsupportedFileType,
-)
 
 
 class Bicardinal:
@@ -40,21 +43,36 @@ class Bicardinal:
         config: Config | None = None,
         openai_api_key: str | None = None,
         mistral_api_key: str | None = None,
+        voyage_api_key: str | None = None,
     ) -> None:
         self._root = Path(root_dir)
         self._root.mkdir(parents=True, exist_ok=True)
         self._config = config or Config()
 
-        openai_client = OpenAI(api_key=openai_api_key)    # shared across summarizer/image/audio
+        openai_client = OpenAI(
+            api_key=openai_api_key
+        )  # shared across summarizer/image/audio
         mistral_client = Mistral(api_key=mistral_api_key)
 
-        self._embedder = Embedder(
-            self._config.embed_model,
+        if (
+            self._config.embed_provider == "voyage"
+            and self._config.embed_model == DEFAULT_EMBED_MODEL
+        ):
+            raise ValueError(
+                "embed_provider='voyage' requires embed_model to be a Voyage model "
+                "(e.g. 'voyage-4'); it is still the sentence-transformers default."
+            )
+        self._embedder = make_embedder(
+            provider=self._config.embed_provider,
+            model=self._config.embed_model,
+            api_key=voyage_api_key,
             batch_size=self._config.embed_batch_size,
+            output_dimension=self._config.embed_output_dimension,
             device=self._config.embed_device,
             doc_prompt=self._config.embed_doc_prompt,
             query_prompt=self._config.embed_query_prompt,
         )
+
         self._summarizer = Summarizer(
             openai_client,
             self._config.summarizer_model,
@@ -67,13 +85,17 @@ class Bicardinal:
                 Modality.DOCX: DocxExtractor(),
                 Modality.PDF: PdfExtractor(mistral_client, self._config.ocr_model),
                 Modality.IMAGE: ImageExtractor(openai_client, self._config.image_model),
-                Modality.AUDIO: AudioExtractor(openai_client, self._config.transcribe_model),
+                Modality.AUDIO: AudioExtractor(
+                    openai_client, self._config.transcribe_model
+                ),
             }
         )
 
     def _collection_path(self, name: str) -> Path:
         if not name.lower().replace("_", "").isalnum():
-            raise ValueError(f"invalid collection name. Only [A-z0-9_] are supported: {name!r}")
+            raise ValueError(
+                f"invalid collection name. Only [A-z0-9_] are supported: {name!r}"
+            )
         return self._root / name
 
     def _build_collection(self, path: Path) -> Collection:
@@ -92,7 +114,9 @@ class Bicardinal:
         path = self._collection_path(name)
         if path.exists():
             raise CollectionExists(name)
-        return self._build_collection(path)  # Collection.__init__ mkdirs + inits empty stores
+        return self._build_collection(
+            path
+        )  # Collection.__init__ mkdirs + inits empty stores
 
     def open(self, name: str) -> Collection:
         path = self._collection_path(name)

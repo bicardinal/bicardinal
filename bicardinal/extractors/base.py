@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 
-from ..office.types import Modality, Usage
+from ..office.types import Modality
+from ..office.types import Usage
 
 
 @dataclass
@@ -15,6 +17,8 @@ class ExtractResult:
 
 class Extractor:
     """Base class for modality extractors: bytes -> ExtractResult."""
+
     modality: Modality
+
     def extract(self, data: bytes, *, filename: str | None = None) -> ExtractResult:
         raise NotImplementedError

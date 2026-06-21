@@ -1,10 +1,12 @@
-
 from __future__ import annotations
-from openai import OpenAI
-from ..office.types import Usage
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
+
+from openai import OpenAI
+
+from ..office.types import Usage
 
 DESCRIBE_PROMPT = (
     "Summarize the text below in 1-3 sentences for semantic search. "
@@ -19,7 +21,6 @@ Focus on:
 Provide a concise summary that can be a good representation of the whole content.
 If the given content is too small to be summarized (< 120 tokens), just rephrase the content."""
 )
-
 
 
 class Summarizer:
@@ -61,7 +62,9 @@ class Summarizer:
         usage = Usage()
         errors: list[tuple[int, Exception]] = []
         with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
-            futures = {pool.submit(self._describe_one, t): i for i, t in enumerate(chunks)}
+            futures = {
+                pool.submit(self._describe_one, t): i for i, t in enumerate(chunks)
+            }
             done = 0
             for fut in as_completed(futures):
                 i = futures[fut]

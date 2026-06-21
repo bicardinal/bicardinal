@@ -6,8 +6,10 @@ import json
 from openai import OpenAI
 
 from ..office.exceptions import ExtractionError
-from ..office.types import Modality, Usage
-from .base import Extractor, ExtractResult
+from ..office.types import Modality
+from ..office.types import Usage
+from .base import Extractor
+from .base import ExtractResult
 
 IMAGE_PROMPT = (
     "Describe the image in 1-3 sentences for semantic search, subject, content, "
@@ -41,7 +43,9 @@ def _image_mime(data: bytes) -> str:
 class ImageExtractor(Extractor):
     modality = Modality.IMAGE
 
-    def __init__(self, client: OpenAI, model: str = "gpt-5.4", *, detail: str = "auto") -> None:
+    def __init__(
+        self, client: OpenAI, model: str = "gpt-5.4", *, detail: str = "auto"
+    ) -> None:
         self._client = client
         self._model = model
         self._detail = detail

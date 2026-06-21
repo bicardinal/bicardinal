@@ -1,6 +1,8 @@
 from __future__ import annotations
-from pathlib import Path
+
 import json
+from pathlib import Path
+
 import brinicle
 
 FILES_KEY = "$__files__$"

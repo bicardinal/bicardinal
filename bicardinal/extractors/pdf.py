@@ -1,11 +1,18 @@
 from __future__ import annotations
+
 import base64
 from io import BytesIO
-from mistralai import Mistral
-from ..office.types import Modality, Usage
+
+from mistralai.client import Mistral
+from pypdf import PdfReader
+from pypdf import PdfWriter
+
 from ..office.exceptions import ExtractionError
-from .base import Extractor, ExtractResult
-from pypdf import PdfReader, PdfWriter
+from ..office.types import Modality
+from ..office.types import Usage
+from .base import Extractor
+from .base import ExtractResult
+
 
 def _write_pages(pages) -> bytes:
     writer = PdfWriter()
@@ -26,7 +33,9 @@ def split_pdf(data: bytes, *, max_pages: int, max_bytes: int) -> list[bytes]:
 
     def emit(group) -> None:
         blob = _write_pages(group)
-        if len(blob) <= max_bytes or len(group) == 1:  # fits, or unsplittable single page
+        if (
+            len(blob) <= max_bytes or len(group) == 1
+        ):  # fits, or unsplittable single page
             out.append(blob)
         else:
             mid = len(group) // 2  # too big -> halve and recurse
@@ -57,7 +66,9 @@ class PdfExtractor(Extractor):
     def extract(self, data: bytes, *, filename: str | None = None) -> ExtractResult:
         segments: list[str] = []
         try:
-            for chunk in split_pdf(data, max_pages=self._max_pages, max_bytes=self._max_bytes):
+            for chunk in split_pdf(
+                data, max_pages=self._max_pages, max_bytes=self._max_bytes
+            ):
                 b64 = base64.b64encode(chunk).decode()
                 resp = self._client.ocr.process(
                     model=self._model,

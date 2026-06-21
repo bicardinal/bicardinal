@@ -1,10 +1,12 @@
 from __future__ import annotations
-from ..office.types import ChunkRecord
+
+import json
 from dataclasses import asdict
 from pathlib import Path
 
-import json
 import brinicle
+
+from ..office.types import ChunkRecord
 
 
 class PayloadStore:
@@ -12,7 +14,7 @@ class PayloadStore:
 
     def __init__(self, path: str | Path, *, shard_count: int = 4) -> None:
         self._store = brinicle.PayloadStore().init(str(path), shard_count=shard_count)
-    
+
     @staticmethod
     def _encode(records: dict[str, ChunkRecord]) -> tuple[list[str], list[str]]:
         ids = list(records.keys())

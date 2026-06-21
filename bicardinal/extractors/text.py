@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from ..office.types import Modality
-from .base import Extractor, ExtractResult
+from .base import Extractor
+from .base import ExtractResult
 
 
 class TextExtractor(Extractor):

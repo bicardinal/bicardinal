@@ -5,8 +5,10 @@ from io import BytesIO
 from openai import OpenAI
 
 from ..office.exceptions import ExtractionError
-from ..office.types import Modality, Usage
-from .base import Extractor, ExtractResult
+from ..office.types import Modality
+from ..office.types import Usage
+from .base import Extractor
+from .base import ExtractResult
 
 
 def split_audio(
@@ -25,7 +27,9 @@ def split_audio(
         buf = BytesIO()
         segment.export(buf, format="mp3")
         blob = buf.getvalue()
-        if len(blob) <= max_bytes or len(segment) <= 1000:  # fits, or <=1s, unsplittable
+        if (
+            len(blob) <= max_bytes or len(segment) <= 1000
+        ):  # fits, or <=1s, unsplittable
             out.append((blob, f"chunk_{idx}.mp3"))
         else:
             half = len(segment) // 2  # too big -> halve and recurse

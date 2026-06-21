@@ -21,8 +21,9 @@ class Config:
     # transcribe
     transcribe_model: str = "whisper-1"
 
-
     # embedder
+    embed_provider: str = "sentence-transformers"  # or "voyage"
+    embed_output_dimension: int | None = None
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_batch_size: int = 64
     embed_device: str | None = None
@@ -46,4 +47,4 @@ class Config:
     # search
     default_k: int = 10
     file_scope_threshold: float = 2.0
-    n_jobs: int = 1   # parallel shard search; raise it when shard_count > 1
+    n_jobs: int = 1  # parallel shard search; raise it when shard_count > 1

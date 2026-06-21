@@ -9,7 +9,8 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 from ..office.types import Modality
-from .base import Extractor, ExtractResult
+from .base import Extractor
+from .base import ExtractResult
 
 
 def _iter_blocks(doc):

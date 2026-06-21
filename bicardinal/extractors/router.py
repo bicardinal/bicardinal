@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import magic
 
-from ..office.exceptions import EmptyFile, UnsupportedFileType
+from ..office.exceptions import EmptyFile
+from ..office.exceptions import UnsupportedFileType
 from ..office.types import Modality
-from .base import Extractor, ExtractResult
+from .base import Extractor
+from .base import ExtractResult
 
 MIME_TO_MODALITY: dict[str, Modality] = {
     "application/pdf": Modality.PDF,

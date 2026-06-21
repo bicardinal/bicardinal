@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "brinicle>=0.1.0",
+    "brinicle==0.1.0",
     "sentence-transformers>=3.0",
     "openai>=1.40",
     "mistralai>=1.0",
@@ -38,6 +38,7 @@ dependencies = [
     "pypdf>=4.0",
     "python-magic>=0.4.27",
     "numpy>=1.26",
+    "voyageai>=0.3"
 ]
 
 [project.optional-dependencies]
