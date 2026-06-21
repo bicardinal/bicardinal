@@ -1,3 +1,16 @@
+<p align="center">
+  <img
+    src="./docs/bicardinal-header.png"
+    alt="bicardinal - multimodal retrieval engine"
+    width="100%"
+  />
+</p>
+<center>
+  
+<p align="center">
+  <a href="https://github.com/bicardinal/bicardinal/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/bicardinal" alt="License"></a>
+  <a href="https://pypi.org/project/bicardinal/"><img src="https://img.shields.io/pypi/v/bicardinal?label=pypi&color=blue" alt="PyPI version"></a>
+</p>
 
 # bicardinal
 
