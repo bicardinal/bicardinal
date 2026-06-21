@@ -35,7 +35,12 @@ format:
 	black tests
 
 pybuild:
-	pip wheel .
+	rm -rf dist
+	python -m build
+	twine check dist/*
+
+upload-testpypi:
+	python -m twine upload -r testpypi dist/* --verbose
 
 upload-pypi:
-	python -m twine upload wheelhouse/* --verbose
+	python -m twine upload dist/* --verbose

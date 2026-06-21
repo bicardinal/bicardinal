@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bicardinal"
-version = "0.0.1"
+version = "0.0.2"
 description = "Multimodal retrieval engine"
 requires-python = ">=3.12"
 readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICEN[CS]E*"]
 authors = [
     { name = "bicardinal", email = "support@bicardinal.com" }
 ]
@@ -49,7 +50,6 @@ dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
 packages = ["bicardinal"]
 
 
-license-files = ["LICEN[CS]E*"]
 
 [project.urls]
 Homepage = "https://github.com/bicardinal/bicardinal"
