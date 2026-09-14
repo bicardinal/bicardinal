@@ -78,14 +78,19 @@ class ImageExtractor(Extractor):
                     }
                 },
             )
-            parsed = json.loads(resp.output_text)
-            description = parsed["description"].strip()
-            transcription = parsed["transcription"].strip()
         except Exception as e:
             raise ExtractionError(f"image extraction failed: {e}") from e
         # Vision input arrives as image tokens already counted in input_tokens,
         # so the model's normal text rate prices the call.
         usage = token_usage(resp, operation="image", model=self._model)
+        try:
+            parsed = json.loads(resp.output_text)
+            description = parsed["description"].strip()
+            transcription = parsed["transcription"].strip()
+        except Exception as e:  # the call was billed even if its output is junk
+            raise ExtractionError(
+                f"image extraction failed: {e}", usage=usage
+            ) from e
         return ExtractResult(
             segments=[transcription],
             modality=self.modality,

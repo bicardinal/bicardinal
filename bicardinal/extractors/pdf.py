@@ -90,6 +90,6 @@ class PdfExtractor(Extractor):
                     self._model, pages=len(pages) if processed is None else processed
                 )
                 segments.extend(page.markdown for page in pages)
-        except Exception as e:
-            raise ExtractionError(f"PDF OCR failed: {e}") from e
+        except Exception as e:  # keep what earlier batches already billed
+            raise ExtractionError(f"PDF OCR failed: {e}", usage=usage) from e
         return ExtractResult(segments=segments, modality=self.modality, usage=usage)

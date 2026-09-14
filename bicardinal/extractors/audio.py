@@ -91,7 +91,9 @@ class AudioExtractor(Extractor):
                     billed_seconds=billed_seconds(seconds),
                 )
                 texts.append(resp.text)
-        except Exception as e:
-            raise ExtractionError(f"audio transcription failed: {e}") from e
+        except Exception as e:  # keep what earlier pieces already billed
+            raise ExtractionError(
+                f"audio transcription failed: {e}", usage=usage
+            ) from e
         transcript = " ".join(t.strip() for t in texts if t.strip())
         return ExtractResult(segments=[transcript], modality=self.modality, usage=usage)

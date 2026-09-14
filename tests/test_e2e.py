@@ -484,3 +484,134 @@ def test_dual_encoding_fusion_weight_routes_between_raw_and_description(
 
     assert raw_only[0].filename != desc_only[0].filename
     col.close()
+
+# --- scoped search across several files, one query embedding
+
+
+def _seeded(store):
+    col = store.create("scoped")
+    col.init("build")
+    col.ingest(
+        "cats.txt", b"Cats are small domesticated felines that purr and chase mice."
+    )
+    col.ingest(
+        "finance.txt", b"Quarterly revenue grew as the company cut operating costs."
+    )
+    col.ingest("space.txt", b"Rockets launch satellites into low earth orbit.")
+    assert col.finalize() == {}
+    return col
+
+
+def test_search_in_files_embeds_the_query_once(store):
+    col = _seeded(store)
+    calls = []
+    real = col._embedder.embed_query
+
+    def counting(text):
+        calls.append(text)
+        return real(text)
+
+    col._embedder.embed_query = counting
+    out = col.search_in_files("a pet animal that meows", ["cats.txt", "finance.txt"], k=2)
+    assert calls == ["a pet animal that meows"]
+    assert list(out) == ["cats.txt", "finance.txt"]
+    assert out["cats.txt"] and all(h.filename == "cats.txt" for h in out["cats.txt"])
+    assert out["finance.txt"] and all(
+        h.filename == "finance.txt" for h in out["finance.txt"]
+    )
+    col.close()
+
+
+def test_search_in_files_matches_per_file_search(store):
+    col = _seeded(store)
+    q = "quarterly earnings"
+    scoped = col.search_in_files(q, ["finance.txt", "space.txt"], k=3)
+    for f in ("finance.txt", "space.txt"):
+        single = col.search_in_file(q, f, k=3)
+        assert [(h.chunk_id, round(h.score, 5)) for h in scoped[f]] == [
+            (h.chunk_id, round(h.score, 5)) for h in single
+        ]
+    col.close()
+
+
+def test_search_in_files_rejects_unknown_names_before_searching(store):
+    col = _seeded(store)
+    with pytest.raises(bicardinal.DocumentNotFound) as info:
+        col.search_in_files("x", ["cats.txt", "nope.txt", "also_nope.txt"])
+    assert "nope.txt" in str(info.value) and "also_nope.txt" in str(info.value)
+    assert col.search_in_files("x", []) == {}
+    assert list(col.search_in_files("x", ["cats.txt", "cats.txt"])) == ["cats.txt"]
+    col.close()
+
+
+def test_precomputed_query_vector_is_accepted_everywhere(store):
+    col = _seeded(store)
+    q = "a pet animal that meows"
+    vec = col.embed_query(q)
+    assert vec.shape == (col._embedder.dim,)
+
+    by_text = col.search(q, k=2)
+    by_vec = col.search(vec, k=2)
+    assert [h.chunk_id for h in by_text] == [h.chunk_id for h in by_vec]
+
+    assert [h.chunk_id for h in col.search_in_file(vec, "cats.txt", k=1)] == [
+        h.chunk_id for h in col.search_in_file(q, "cats.txt", k=1)
+    ]
+    assert [f.filename for f in col.most_similar_files(vec, k=2)] == [
+        f.filename for f in col.most_similar_files(q, k=2)
+    ]
+    assert list(col.search_in_files(vec, ["cats.txt"])) == ["cats.txt"]
+
+    with pytest.raises(ValueError):
+        col.search(vec[:-1], k=1)  # wrong dimension
+    col.close()
+
+
+def test_precomputed_vector_must_be_fused_under_dual_encoding(tmp_path, monkeypatch):
+    store = _dual_store(tmp_path, monkeypatch)
+    col = store.create("dualvec")
+    col.init("build")
+    col.ingest("cats.txt", b"Cats purr and chase mice.")
+    assert col.finalize() == {}
+
+    vec = col.embed_query("a pet that meows", fusion_weight=0.3)
+    assert vec.shape == (col._embedder.dim * 2,)
+    assert col.search(vec, k=1)[0].filename == "cats.txt"
+
+    with pytest.raises(ValueError):
+        col.search(col._embedder.embed_query("a pet"), k=1)  # unfused half
+    with pytest.raises(ValueError):
+        col.embed_query("a pet", fusion_weight=1.5)
+    col.close()
+
+
+def test_failed_extraction_spend_lands_in_collection_usage(tmp_path, monkeypatch):
+    class FailingOcr:
+        calls = 0
+
+        def process(self, **kw):
+            FailingOcr.calls += 1
+            if FailingOcr.calls == 2:
+                raise RuntimeError("mistral 500")
+            page = type("P", (), {"markdown": "page"})()
+            return type("R", (), {"pages": [page]})()
+
+    class FailingMistral:
+        def __init__(self, *a, **kw):
+            self.ocr = FailingOcr()
+
+    monkeypatch.setattr(bicardinal, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(bicardinal, "Mistral", FailingMistral)
+    import bicardinal.extractors.pdf as pdf_mod
+
+    monkeypatch.setattr(pdf_mod, "split_pdf", lambda data, **kw: [data, data])
+
+    store = Bicardinal(tmp_path / "data", openai_api_key="t", mistral_api_key="t")
+    col = store.create("spend")
+    col.init("build")
+    with pytest.raises(bicardinal.ExtractionError) as info:
+        col.ingest("doc.pdf", b"%PDF-1.4 fake")
+    assert info.value.usage.ocr_pages == 1
+    assert col.usage().ocr_pages == 1  # folded in even though ingest raised
+    assert not col.status().filenames
+    col.close()

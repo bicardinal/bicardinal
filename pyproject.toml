@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.25,<1.31"]  # 1.31+ emits core metadata 2.5, which twine and older pip reject
 build-backend = "hatchling.build"
 
 [project]
 name = "bicardinal"
-version = "0.0.6"
+version = "0.0.7"
 description = "Multimodal retrieval engine"
 requires-python = ">=3.12"
 readme = "README.md"

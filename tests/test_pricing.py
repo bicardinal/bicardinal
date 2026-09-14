@@ -472,3 +472,109 @@ def test_reasoning_tokens_are_recorded_but_not_billed_twice():
     usage = token_usage(_Resp(0, 1_000_000, reasoning=400_000), operation="s", model=LUNA)
     assert usage.reasoning_tokens == 400_000
     assert _usd(usage) == Decimal("1.20")  # 1M output, not 1.4M
+
+
+# -- a failed extraction still reports what it already spent ----------------
+
+
+def test_ocr_failure_keeps_the_pages_billed_before_it():
+    from bicardinal.extractors.pdf import PdfExtractor
+    from bicardinal.office.exceptions import ExtractionError
+
+    class _Ocr:
+        calls = 0
+
+        def process(self, **kw):
+            _Ocr.calls += 1
+            if _Ocr.calls == 3:
+                raise RuntimeError("mistral 500")
+            pages = [type("P", (), {"markdown": "p"})() for _ in range(2)]
+            return type("R", (), {"pages": pages})()
+
+    client = type("M", (), {"ocr": _Ocr()})()
+    extractor = PdfExtractor(client, "mistral-ocr-latest")
+
+    import bicardinal.extractors.pdf as pdf_mod
+
+    original = pdf_mod.split_pdf
+    pdf_mod.split_pdf = lambda data, **kw: [data, data, data]  # three batches
+    try:
+        with pytest.raises(ExtractionError) as info:
+            extractor.extract(b"%PDF-1.4 fake")
+    finally:
+        pdf_mod.split_pdf = original
+
+    usage = info.value.usage
+    assert usage.ocr_pages == 4  # two batches of two pages succeeded
+    assert usage.ocr["mistral-ocr-latest"].requests == 2
+    assert usage.cost().total_usd == Decimal("0.016")
+
+
+def test_audio_failure_keeps_the_pieces_billed_before_it():
+    from bicardinal.extractors.audio import AudioExtractor
+    from bicardinal.office.exceptions import ExtractionError
+
+    class _Transcriptions:
+        calls = 0
+
+        def create(self, **kw):
+            _Transcriptions.calls += 1
+            if _Transcriptions.calls == 2:
+                raise RuntimeError("whisper timeout")
+            return type("T", (), {"text": "words"})()
+
+    client = type(
+        "C", (), {"audio": type("A", (), {"transcriptions": _Transcriptions()})()}
+    )()
+    extractor = AudioExtractor(client, "whisper-1")
+
+    import bicardinal.extractors.audio as audio_mod
+
+    original = audio_mod.split_audio
+    audio_mod.split_audio = lambda data, **kw: (
+        [(b"a", "chunk_0.mp3", 600.0), (b"b", "chunk_1.mp3", 600.0)],
+        1200.0,
+    )
+    try:
+        with pytest.raises(ExtractionError) as info:
+            extractor.extract(b"ID3 fake")
+    finally:
+        audio_mod.split_audio = original
+
+    usage = info.value.usage
+    assert usage.audio["whisper-1"].requests == 1
+    assert usage.audio["whisper-1"].billed_seconds == 600
+    assert usage.cost().total_usd == Decimal("0.06")  # 10 min * $0.006
+
+
+def test_image_call_with_unparseable_output_is_still_billed():
+    from bicardinal.extractors.image import ImageExtractor
+    from bicardinal.office.exceptions import ExtractionError
+
+    client = _FakeImageClient(i=1_500, o=40)
+    client.responses.create().output_text = "not json"
+    with pytest.raises(ExtractionError) as info:
+        ImageExtractor(client, LUNA).extract(b"\x89PNG\r\n\x1a\n")
+    assert info.value.usage.image_input_tokens == 1_500
+
+
+def test_image_call_that_never_returns_carries_empty_usage():
+    from bicardinal.extractors.image import ImageExtractor
+    from bicardinal.office.exceptions import ExtractionError
+
+    def boom(*a, **kw):
+        raise RuntimeError("connection reset")
+
+    client = type("C", (), {"responses": type("R", (), {"create": boom})()})()
+    with pytest.raises(ExtractionError) as info:
+        ImageExtractor(client, LUNA).extract(b"\x89PNG\r\n\x1a\n")
+    assert info.value.usage.tokens == {}
+    assert str(info.value).startswith("image extraction failed")
+
+
+def test_extraction_error_defaults_to_empty_usage():
+    from bicardinal.office.exceptions import ExtractionError
+
+    err = ExtractionError("plain")
+    assert isinstance(err.usage, Usage)
+    assert err.usage.cost().total_usd == 0

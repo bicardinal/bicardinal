@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .types import Usage
+
 
 class BicardinalError(Exception):
     """Base class for all bicardinal errors."""
@@ -22,7 +27,19 @@ class EmptyFile(BicardinalError):
 
 
 class ExtractionError(BicardinalError):
-    """An extractor (OCR, transcription, decode, ...) failed."""
+    """An extractor (OCR, transcription, decode, ...) failed.
+
+    ``usage`` holds whatever was already billed before the failure (OCR
+    batches or audio pieces that succeeded), so the spend is not lost.
+    """
+
+    def __init__(self, message: str, *, usage: "Usage | None" = None) -> None:
+        super().__init__(message)
+        if usage is None:
+            from .types import Usage
+
+            usage = Usage()
+        self.usage = usage
 
 
 class CollectionExists(BicardinalError):

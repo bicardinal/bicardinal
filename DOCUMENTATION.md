@@ -195,6 +195,29 @@ for hit in col.search_in_file("payment terms", "contract.pdf", k=5):
     print(hit.chunk_index, hit.raw_text[:120])
 ```
 
+### Search within several documents
+
+To scope one query to a handful of files, use `search_in_files`. It embeds the
+query once and searches each file, so it costs one embedding rather than one
+per file.
+
+```python
+hits = col.search_in_files("payment terms", ["contract.pdf", "addendum.docx"], k=5)
+for filename, file_hits in hits.items():
+    for hit in file_hits:
+        print(filename, hit.chunk_index, hit.raw_text[:120])
+```
+
+If you run many searches with the same query, embed it yourself and pass the
+vector in place of the string. Every search method accepts either.
+
+```python
+vec = col.embed_query("payment terms")
+col.search(vec, k=5)
+col.search_in_file(vec, "contract.pdf", k=5)
+col.most_similar_files(vec, k=3)
+```
+
 ### Read a document's chunks directly
 
 Use this when you want a file's content in order, rather than the passages that
@@ -506,7 +529,7 @@ Search only within one file.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | The text to search for. |
+| `query` | str or ndarray | required | The text to search for, or a vector from [`embed_query`](#embed_query). |
 | `filename` | str | required | The file to search inside. |
 | `k` | int or None | `None` | Maximum number of results. Falls back to `Config.default_k`. |
 | `n_jobs` | int or None | `None` | Parallel workers. Falls back to `Config.n_jobs`. |
@@ -516,6 +539,40 @@ Search only within one file.
 
 Returns a list of [`SearchHit`](#searchhit). Raises `DocumentNotFound` if the
 file is not in the collection.
+
+#### search_in_files
+
+```python
+search_in_files(query, filenames, k=None, *, n_jobs=None, efs=None, exact=True, fusion_weight=None) -> dict[str, list[SearchHit]]
+```
+
+Search within several files with one query embedding. Each file gets its own
+top-`k`, as if `search_in_file` had been called for it.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `query` | str or ndarray | required | The text to search for, or a vector from [`embed_query`](#embed_query). |
+| `filenames` | list[str] | required | The files to search inside. Duplicates are searched once. |
+| `k` | int or None | `None` | Maximum number of results per file. Falls back to `Config.default_k`. |
+| `n_jobs` | int or None | `None` | Parallel workers. Falls back to `Config.n_jobs`. |
+| `efs` | int or None | `None` | Search breadth. Falls back to `Config.efs`. |
+| `exact` | bool | `True` | Keep only results that belong to each file. |
+| `fusion_weight` | float or None | `None` | Only used on dual-encoded collections. Ignored when `query` is a vector. |
+
+Returns a dict mapping each filename to its list of [`SearchHit`](#searchhit),
+in the order the names were given. Raises `DocumentNotFound`, naming every
+missing file, before any search runs.
+
+#### embed_query
+
+```python
+embed_query(query, *, fusion_weight=None) -> np.ndarray
+```
+
+Embed a query once so the vector can be passed to any search method instead of
+the string. On a dual-encoded collection the returned vector is already fused
+with `fusion_weight`, so it matches the index dimension. Query embedding is
+billed here, not at search time, when the embedder is hosted.
 
 #### most_similar_files
 
@@ -527,7 +584,7 @@ Rank whole files by how well their best passage matches the query.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | The text to search for. |
+| `query` | str or ndarray | required | The text to search for, or a vector from [`embed_query`](#embed_query). |
 | `k` | int or None | `None` | Maximum number of files to return. Falls back to `Config.default_k`. |
 | `candidate_k` | int | `100` | How many passages to consider before grouping them by file. Raise it if you have many files and want wider coverage. |
 | `n_jobs` | int or None | `None` | Parallel workers. Falls back to `Config.n_jobs`. |
@@ -693,7 +750,7 @@ Returned by `ingest`.
 
 #### SearchHit
 
-Returned by `search` and `search_in_file`, and held inside `FileHit`.
+Returned by `search`, `search_in_file`, and `search_in_files`, and held inside `FileHit`.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -821,7 +878,7 @@ handle any library error.
 | `DocumentNotFound` | No file with this name exists in the collection. |
 | `UnsupportedFileType` | The detected file type has no extractor. |
 | `EmptyFile` | The input was zero bytes. |
-| `ExtractionError` | An extractor (OCR, transcription, decoding) failed. |
+| `ExtractionError` | An extractor (OCR, transcription, decoding) failed. Its `usage` attribute holds what was billed before the failure, such as OCR batches that succeeded; `ingest` folds this into the collection's `usage()` before re-raising. |
 | `CollectionExists` | A collection with this name already exists. |
 | `CollectionNotFound` | No collection with this name exists. |
 
@@ -847,7 +904,7 @@ store = Bicardinal("./data", config=config)
 
 `shard_count` is fixed when the collection is created, so choose it before you
 start adding files. `n_jobs` can be changed at any time, including per call to
-`search`, `search_in_file`, and `most_similar_files`.
+`search`, `search_in_file`, `search_in_files`, and `most_similar_files`.
 
 
 ## Dual encoding

@@ -47,4 +47,7 @@ upload-pypi:
 	python -m twine upload dist/* --verbose
 
 test:
-	pytest .
+	HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 pytest tests/test_pricing.py tests/test_e2e.py
+
+test-live:
+	pytest tests/test_live.py
