@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 from mistralai.client import Mistral
@@ -9,6 +10,7 @@ from openai import OpenAI
 from .collection import Collection
 from .collection import CollectionStatus
 from .extractors.audio import AudioExtractor
+from .extractors.base import ExtractBatch
 from .extractors.docx import DocxExtractor
 from .extractors.image import ImageExtractor
 from .extractors.pdf import PdfExtractor
@@ -119,6 +121,27 @@ class Bicardinal:
     def _is_collection(self, path: Path) -> bool:
         return path.is_dir() and any(path.iterdir())  # exists, and has store files
 
+    def extract_batches(self, data: bytes, *, start: int = 0) -> Iterator[ExtractBatch]:
+        """Extract in pieces, yielding each as it lands with its own usage, so
+        a caller can keep and bill what it has before the next piece runs and
+        resume from ``start`` after a failure. A PDF yields one piece per
+        page batch; every other type yields one piece. What a caller gets
+        back from this is what ``Collection.chunk`` and ``describe`` take."""
+        modality, _, suggested = self._router.detect(data)
+        extractor = self._router._extractors[modality]
+        if isinstance(extractor, PdfExtractor):
+            yield from extractor.extract_batches(data, start=start)
+            return
+        if start == 0:
+            result = extractor.extract(data, filename=suggested)
+            yield ExtractBatch(
+                index=0,
+                total=1,
+                segments=list(result.segments),
+                usage=result.usage,
+                descriptions=result.prebuilt_descriptions,
+            )
+
     def extract_text(self, file: str | Path | bytes) -> str:
         """
             hidden gem.
@@ -163,6 +186,7 @@ class Bicardinal:
 
 __all__ = [
     "Bicardinal",
+    "ExtractBatch",
     "Collection",
     "Config",
     "CollectionStatus",

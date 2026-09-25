@@ -615,3 +615,137 @@ def test_failed_extraction_spend_lands_in_collection_usage(tmp_path, monkeypatch
     assert col.usage().ocr_pages == 1  # folded in even though ingest raised
     assert not col.status().filenames
     col.close()
+
+
+# --- ingestion in stages ----------------------------------------------------
+
+
+class _BatchOcr:
+    """OCR that answers one page per call and can be made to fail on a
+    given batch, so the pieces can be watched landing."""
+
+    def __init__(self, fail_at: int | None = None):
+        self.calls = 0
+        self.fail_at = fail_at
+
+    def process(self, *, model, document, **kw):
+        self.calls += 1
+        if self.fail_at is not None and self.calls == self.fail_at:
+            raise RuntimeError("batch refused")
+        page = type("P", (), {"markdown": f"page text {self.calls}"})()
+        return type("R", (), {"pages": [page]})()
+
+
+def _pdf(pages: int) -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=100, height=100)
+    buf = BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def _batching_store(tmp_path, monkeypatch, ocr):
+    class BatchMistral:
+        def __init__(self, *a, **kw):
+            self.ocr = ocr
+
+    monkeypatch.setattr(bicardinal, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(bicardinal, "Mistral", BatchMistral)
+    store = Bicardinal(
+        tmp_path / "data",
+        config=Config(chunk_size=128, overlap=0.1),
+        openai_api_key="test",
+        mistral_api_key="test",
+    )
+    # Two pages per batch, so a five-page file is three pieces.
+    store._router._extractors[bicardinal.Modality.PDF]._max_pages = 2
+    return store
+
+
+def test_a_pdf_extracts_in_batches_that_can_be_resumed(tmp_path, monkeypatch):
+    ocr = _BatchOcr(fail_at=2)
+    store = _batching_store(tmp_path, monkeypatch, ocr)
+    data = _pdf(5)
+
+    landed = []
+    with pytest.raises(bicardinal.ExtractionError) as failure:
+        for batch in store.extract_batches(data):
+            landed.append(batch)
+    # The first piece was handed over before the second failed, with its
+    # own bill; the failure carries only the failed piece's usage.
+    assert [b.index for b in landed] == [0]
+    assert landed[0].total == 3 and landed[0].segments == ["page text 1"]
+    assert landed[0].usage.ocr_pages == 1
+    assert failure.value.usage.ocr_pages == 0
+
+    # Resumed from the piece that failed, the rest lands.
+    rest = list(store.extract_batches(data, start=1))
+    assert [b.index for b in rest] == [1, 2]
+    assert ocr.calls == 4  # one before the failure, the failure, then two
+
+
+def test_ingest_from_parts_matches_ingest_from_bytes(tmp_path, monkeypatch):
+    store = _batching_store(tmp_path, monkeypatch, _BatchOcr())
+    data = _pdf(3)
+
+    whole = store.create("whole")
+    whole.init("build")
+    direct = whole.ingest("doc.pdf", data)
+    whole.finalize()
+
+    staged = store.create("staged")
+    segments = []
+    usage = bicardinal.Usage()
+    for batch in store.extract_batches(data):
+        segments.extend(batch.segments)
+        usage = usage + batch.usage
+    chunks = staged.chunk(segments)
+    descriptions, described, errors = staged.describe(chunks)
+    staged.init("build")
+    result = staged.ingest_prepared(
+        "doc.pdf", chunks, descriptions, usage=usage + described, errors=errors
+    )
+    assert staged.finalize() == {}
+
+    assert result.n_chunks == direct.n_chunks >= 1
+    # The fake answers one page per call, so pages equal batches: two.
+    assert result.usage.ocr_pages == direct.usage.ocr_pages == 2
+    assert result.usage.cost().total_usd == direct.usage.cost().total_usd
+    # The fake numbers its pages per call, so the text differs between the
+    # two runs; the shape does not.
+    assert len(staged.read_chunks("doc.pdf")) == len(whole.read_chunks("doc.pdf"))
+    assert [c.chunk_index for c in staged.read_chunks("doc.pdf")] == list(range(result.n_chunks))
+    assert staged.search("page text", k=1)[0].filename == "doc.pdf"
+    with pytest.raises(bicardinal.DuplicateDocument):
+        staged.ingest_prepared("doc.pdf", chunks, descriptions)
+    with pytest.raises(ValueError):
+        staged.ingest_prepared("other.pdf", chunks, descriptions[:-1])
+
+
+def test_describing_only_the_missing_chunks_resumes_a_summary(store):
+    col = store.create("resume")
+    chunks = col.chunk(["alpha " * 200, "beta " * 200])
+    assert len(chunks) >= 2
+    # The first chunk was described in an earlier run and kept.
+    kept = {0: "already described"}
+    todo = [c for i, c in enumerate(chunks) if i not in kept]
+    fresh, usage, errors = col.describe(todo)
+    assert len(fresh) == len(todo) and errors == []
+    descriptions = [kept.get(i) or fresh.pop(0) for i in range(len(chunks))]
+    col.init("build")
+    result = col.ingest_prepared("notes.txt", chunks, descriptions, usage=usage)
+    col.finalize()
+    assert result.n_chunks == len(chunks)
+    assert col.read_chunks("notes.txt")[0].description == "already described"
+
+
+def test_a_single_piece_type_is_one_batch(store):
+    batches = list(store.extract_batches(b"plain text " * 50))
+    assert len(batches) == 1 and batches[0].total == 1 and batches[0].index == 0
+    assert batches[0].segments and batches[0].descriptions is None
+    assert list(store.extract_batches(b"plain text", start=1)) == []

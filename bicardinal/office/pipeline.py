@@ -37,6 +37,47 @@ class IngestOutput:
     errors: list[str]
 
 
+def chunk_segments(segments: list[str], *, config: Config) -> list[str]:
+    """Window extracted text into the chunks that get described and indexed.
+    Deterministic: the same text always chunks the same way, so text kept
+    from an earlier run re-chunks identically on resume."""
+    raw_texts: list[str] = []
+    for seg in segments:
+        raw_texts.extend(
+            chunk_text(seg, chunk_size=config.chunk_size, overlap=config.overlap)
+        )
+    return raw_texts
+
+
+def build_from_parts(
+    filename: str,
+    raw_texts: list[str],
+    descriptions: list[str],
+    *,
+    embedder: Embedder,
+    config: Config,
+    usage: Usage | None = None,
+    errors: list[str] | None = None,
+    on_progress: ProgressFn | None = None,
+) -> IngestOutput:
+    """The last stage of ingestion from parts a caller already holds: embed
+    and lay out the records. ``usage`` and ``errors`` are what producing the
+    parts cost and what went wrong, carried through to the result."""
+    if len(raw_texts) != len(descriptions):
+        raise ValueError("one description per chunk")
+
+    def progress(stage: str, done: int, total: int) -> None:
+        if on_progress is not None:
+            on_progress(stage, done, total)
+
+    usage = usage if usage is not None else Usage()
+    errors = list(errors or [])
+    index_dim = embedder.dim * 2 if config.dual_encoding else embedder.dim
+    return _lay_out(
+        filename, raw_texts, descriptions, embedder, config, usage, errors, index_dim, progress
+    )
+
+
 def build_chunks(
     filename: str,
     data: bytes,
@@ -63,11 +104,7 @@ def build_chunks(
         descriptions = extracted.prebuilt_descriptions
         progress("describe", len(raw_texts), len(raw_texts))
     else:  # text/docx/pdf/audio: window each segment, then summarize
-        raw_texts = []
-        for seg in extracted.segments:
-            raw_texts.extend(
-                chunk_text(seg, chunk_size=config.chunk_size, overlap=config.overlap)
-            )
+        raw_texts = chunk_segments(extracted.segments, config=config)
         descriptions, desc_usage, desc_errors = summarizer.describe(
             raw_texts, on_tick=lambda d, t: progress("describe", d, t)
         )
@@ -75,6 +112,14 @@ def build_chunks(
         errors = [f"chunk {i}: {type(e).__name__}: {e}" for i, e in desc_errors]
 
     index_dim = embedder.dim * 2 if config.dual_encoding else embedder.dim
+    return _lay_out(
+        filename, raw_texts, descriptions, embedder, config, usage, errors, index_dim, progress
+    )
+
+
+def _lay_out(
+    filename, raw_texts, descriptions, embedder, config, usage, errors, index_dim, progress
+) -> IngestOutput:
     if raw_texts:
         desc_vecs = embedder.embed_documents(descriptions)  # embed the DESCRIPTION
         if config.dual_encoding:  # also embed raw text; store both as one vector

@@ -363,6 +363,36 @@ print(store.list())          # names of existing collections
 store.delete("old_project")  # remove one collection
 ```
 
+### Ingest a long file in pieces, and resume after a failure
+
+`ingest` runs extraction, description, embedding and the write as one call.
+For a thousand-page PDF that is twenty minutes of OCR and summaries, and a
+provider failure or a restart in the middle throws away what was already
+paid for. The same work can be run in pieces, keeping each as it lands:
+
+```python
+usage = Usage()
+segments = []
+for batch in store.extract_batches(data, start=done_batches):
+    segments.extend(batch.segments)      # keep the text of this piece
+    usage = usage + batch.usage          # and bill it now
+    done_batches = batch.index + 1       # resume from here if the next fails
+
+chunks = col.chunk(segments)             # deterministic: the same text, the same chunks
+todo = [c for i, c in enumerate(chunks) if i not in described]
+fresh, cost, errors = col.describe(todo) # only what still lacks a description
+usage = usage + cost
+
+col.init("insert")
+result = col.ingest_prepared("report.pdf", chunks, descriptions, usage=usage, errors=errors)
+col.finalize()
+```
+
+A PDF yields one piece per page batch, every other type one piece. A piece
+that fails raises `ExtractionError` carrying only its own usage; what was
+yielded before is yours. `ingest_prepared` costs nothing beyond embedding,
+which is local, and stages the file for `finalize` exactly as `ingest` does.
+
 ### Use Voyage AI embeddings instead of the local model
 
 ```python
@@ -432,6 +462,18 @@ Methods:
 Collection names may contain letters, digits, and underscores only. Other
 characters raise `ValueError`.
 
+#### extract_batches
+
+```python
+extract_batches(data, *, start=0) -> Iterator[ExtractBatch]
+```
+
+Extract in pieces, yielding each as it lands. A PDF yields one `ExtractBatch`
+per page batch, every other type one. Each carries `index`, `total`,
+`segments`, its own `usage`, and for an image `descriptions`. A piece that
+fails raises `ExtractionError` with only that piece's usage. `start` skips
+pieces already held.
+
 ### Collection
 
 A named group of files. Obtain one from `store.create(name)` or
@@ -483,6 +525,37 @@ unknown type, and `ExtractionError` if extraction fails.
 Per chunk description failures do not raise. They are reported in the
 `errors` list of the returned `AddResult`, and the raw chunk text is used in
 place of the missing description.
+
+#### chunk
+
+```python
+chunk(segments) -> list[str]
+```
+
+Window extracted text into the chunks `ingest` would describe and index.
+Deterministic, so text kept from an earlier run chunks the same way again.
+
+#### describe
+
+```python
+describe(chunks, *, on_tick=None) -> tuple[list[str], Usage, list[str]]
+```
+
+Describe chunks for indexing, as `ingest` would. Returns the descriptions in
+order, what they cost, and the errors; a chunk whose description failed gets
+its raw text as its description. Call it on only the chunks you still lack.
+
+#### ingest_prepared
+
+```python
+ingest_prepared(filename, raw_texts, descriptions, *, usage=None, errors=None, on_progress=None) -> AddResult
+```
+
+Add a file from chunks and descriptions you already hold: embed, write, and
+stage for `finalize`, as `ingest` does from bytes. `usage` is what producing
+the parts cost and is counted on the handle and returned in the result.
+Raises `DuplicateDocument` for a name already in the collection and
+`ValueError` when the two lists differ in length.
 
 #### finalize
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
@@ -11,6 +12,8 @@ from .office.exceptions import ExtractionError
 from .office.pipeline import IngestOutput
 from .office.pipeline import ProgressFn
 from .office.pipeline import build_chunks
+from .office.pipeline import build_from_parts
+from .office.pipeline import chunk_segments
 from .office.types import AddResult
 from .office.types import FileHit
 from .office.types import SearchHit
@@ -165,6 +168,64 @@ class Collection:
         except ExtractionError as e:  # what was billed before the failure
             self._usage = self._usage + e.usage
             raise
+        return self._stage(filename, out, on_progress)
+
+    def chunk(self, segments: list[str]) -> list[str]:
+        """Window extracted text into chunks, as ``ingest`` would. Deterministic,
+        so text kept from an earlier run chunks the same way on resume."""
+        return chunk_segments(segments, config=self._config)
+
+    def describe(
+        self,
+        chunks: list[str],
+        *,
+        on_tick: Callable[[int, int], None] | None = None,
+    ) -> tuple[list[str], Usage, list[str]]:
+        """Describe chunks for indexing, as ``ingest`` would, for the chunks a
+        caller still lacks a description for. Returns the descriptions in
+        order, what it cost, and the errors, with the raw text standing in
+        for a chunk whose description failed."""
+        descriptions, usage, failures = self._summarizer.describe(chunks, on_tick=on_tick)
+        self._usage = self._usage + usage
+        return (
+            descriptions,
+            usage,
+            [f"chunk {i}: {type(e).__name__}: {e}" for i, e in failures],
+        )
+
+    def ingest_prepared(
+        self,
+        filename: str,
+        raw_texts: list[str],
+        descriptions: list[str],
+        *,
+        usage: Usage | None = None,
+        errors: list[str] | None = None,
+        on_progress: ProgressFn | None = None,
+    ) -> AddResult:
+        """Add a file from chunks and descriptions the caller already holds,
+        the way ``ingest`` adds one from bytes: embed, write, and stage for
+        ``finalize``. For a caller that extracts and describes in steps of its
+        own, keeping each as it lands, so a failure or a restart resumes from
+        the last one instead of paying again. ``usage`` is what producing
+        the parts cost; it is counted on this handle and returned."""
+        if self._catalog.has_file(filename):
+            raise DuplicateDocument(filename)
+        out = build_from_parts(
+            filename,
+            raw_texts,
+            descriptions,
+            embedder=self._embedder,
+            config=self._config,
+            usage=usage,
+            errors=errors,
+            on_progress=on_progress,
+        )
+        return self._stage(filename, out, on_progress)
+
+    def _stage(
+        self, filename: str, out: IngestOutput, on_progress: ProgressFn | None
+    ) -> AddResult:
         errors = list(out.errors)
         self._usage = self._usage + out.usage
         try:

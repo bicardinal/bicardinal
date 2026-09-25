@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterator
 from io import BytesIO
 
 from mistralai.client import Mistral
@@ -11,6 +12,7 @@ from ..office.config import DEFAULT_OCR_MODEL
 from ..office.exceptions import ExtractionError
 from ..office.types import Modality
 from ..office.types import Usage
+from .base import ExtractBatch
 from .base import Extractor
 from .base import ExtractResult
 
@@ -64,14 +66,23 @@ class PdfExtractor(Extractor):
         self._max_pages = max_pages
         self._max_bytes = max_bytes
 
-    def extract(self, data: bytes, *, filename: str | None = None) -> ExtractResult:
-        segments: list[str] = []
-        usage = Usage()
-        try:
-            for chunk in split_pdf(
-                data, max_pages=self._max_pages, max_bytes=self._max_bytes
-            ):
-                b64 = base64.b64encode(chunk).decode()
+    def batches(self, data: bytes) -> list[bytes]:
+        """The page batches OCR would run on, without running it."""
+        return split_pdf(data, max_pages=self._max_pages, max_bytes=self._max_bytes)
+
+    def extract_batches(
+        self, data: bytes, *, start: int = 0
+    ) -> Iterator[ExtractBatch]:
+        """OCR one page batch at a time, yielding each as it lands, so a
+        caller can keep and bill what it has before the next batch runs, and
+        resume from ``start`` after a failure or a restart. A batch that
+        fails raises ``ExtractionError`` carrying only its own usage: what
+        was yielded before is the caller's already."""
+        batches = self.batches(data)
+        for index in range(start, len(batches)):
+            usage = Usage()
+            try:
+                b64 = base64.b64encode(batches[index]).decode()
                 resp = self._client.ocr.process(
                     model=self._model,
                     document={
@@ -89,7 +100,22 @@ class PdfExtractor(Extractor):
                 usage.add_pages(
                     self._model, pages=len(pages) if processed is None else processed
                 )
-                segments.extend(page.markdown for page in pages)
-        except Exception as e:  # keep what earlier batches already billed
-            raise ExtractionError(f"PDF OCR failed: {e}", usage=usage) from e
+            except Exception as e:
+                raise ExtractionError(f"PDF OCR failed: {e}", usage=usage) from e
+            yield ExtractBatch(
+                index=index,
+                total=len(batches),
+                segments=[page.markdown for page in pages],
+                usage=usage,
+            )
+
+    def extract(self, data: bytes, *, filename: str | None = None) -> ExtractResult:
+        segments: list[str] = []
+        usage = Usage()
+        try:
+            for batch in self.extract_batches(data):
+                segments.extend(batch.segments)
+                usage = usage + batch.usage
+        except ExtractionError as e:  # keep what earlier batches already billed
+            raise ExtractionError(str(e), usage=usage + e.usage) from e
         return ExtractResult(segments=segments, modality=self.modality, usage=usage)

@@ -8,6 +8,20 @@ from ..office.types import Usage
 
 
 @dataclass
+class ExtractBatch:
+    """One piece of an extraction that runs in pieces: which piece, of how
+    many, the text it produced, and what it cost on its own."""
+
+    index: int
+    total: int
+    segments: list[str]
+    usage: Usage = field(default_factory=Usage)
+    # An image's description, written by vision alongside its text; None for
+    # everything that is described later from its chunks.
+    descriptions: list[str] | None = None
+
+
+@dataclass
 class ExtractResult:
     segments: list[str]
     modality: Modality
